@@ -1,7 +1,7 @@
 import cv2
 import requests
 
-URL = "http://127.0.0.1:8000/api/api/mark-attendance"  # ✅ Correct API endpoint
+URL = "http://127.0.0.1:8000/api/mark-attendance"  # ✅ Correct API endpoint
 
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 

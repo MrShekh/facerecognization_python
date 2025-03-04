@@ -1,15 +1,35 @@
-from datetime import datetime
-from typing import Optional
 from pydantic import BaseModel
+from datetime import datetime
+from bson import ObjectId
 
-# Attendance Schema for validation
-class Attendance(BaseModel):
-    student_id: str  # Unique ID of the student
-    name: str  # Student's full name
-    subject: str  # Subject name
-    date: str  # Date of attendance (YYYY-MM-DD format)
-    timestamp: Optional[datetime] = datetime.utcnow()  # Automatic timestamp
-    status: str  # "Present" or "Absent"
+#  Model for Raw Attendance Records (Daily)
+class AttendanceRecord(BaseModel):
+    emp_id: str
+    date: datetime
+    status: str  # Present, Absent, Late, etc.
 
-    class Config:
-        orm_mode = True  # Allows ORM compatibility (if needed in the future)
+#  Model for Weekly Attendance Summary
+class WeeklyAttendance(BaseModel):
+    emp_id: str
+    week_start: datetime
+    week_end: datetime
+    total_present: int
+    total_absent: int
+    total_late: int
+
+#  Model for Monthly Attendance Summary
+class MonthlyAttendance(BaseModel):
+    emp_id: str
+    month: int  # 1 to 12
+    year: int
+    total_present: int
+    total_absent: int
+    total_late: int
+
+#  Model for Yearly Attendance Summary
+class YearlyAttendance(BaseModel):
+    emp_id: str
+    year: int
+    total_present: int
+    total_absent: int
+    total_late: int

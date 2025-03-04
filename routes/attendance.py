@@ -7,6 +7,8 @@ import cv2
 import numpy as np
 from datetime import datetime, timedelta
 import face_recognition
+from bson import ObjectId
+from fastapi import APIRouter, Query
 
 router = APIRouter()
 UPLOAD_DIR = "dataset/"
@@ -17,6 +19,8 @@ known_face_encodings = []
 known_emp_ids = []
 recent_attendance = {}  # Dictionary to store last attendance time for each emp_id
 ATTENDANCE_THRESHOLD = timedelta(minutes=5)  # Prevent duplicate attendance within 5 minutes
+OFFICE_START_TIME = datetime.strptime("09:00", "%H:%M").time()
+LATE_ATTENDANCE_TIME = datetime.strptime("09:15", "%H:%M").time()
 
 def load_known_faces():
     global known_face_encodings, known_emp_ids
@@ -86,7 +90,7 @@ def recognize_face(frame):
     
     return frame, emp_id
 
-@router.post("/api/mark-attendance")
+@router.post("/mark-attendance")
 async def mark_attendance(file: UploadFile = File(...)):
     try:
         image_bytes = await file.read()
@@ -94,25 +98,132 @@ async def mark_attendance(file: UploadFile = File(...)):
         frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         if frame is None:
             raise HTTPException(status_code=400, detail="Invalid image format")
-        
+
         _, emp_id = recognize_face(frame)
         if emp_id != "Unknown":
             now = datetime.now()
-            
-            # Check if attendance was recently marked
-            if emp_id in recent_attendance:
-                last_marked_time = recent_attendance[emp_id]
-                if now - last_marked_time < ATTENDANCE_THRESHOLD:
-                    return JSONResponse(content={"message": f"Attendance already marked for {emp_id}"})
+            if emp_id in recent_attendance and now - recent_attendance[emp_id] < ATTENDANCE_THRESHOLD:
+                return JSONResponse(content={"message": f"Attendance already marked for {emp_id}"})
             
             recent_attendance[emp_id] = now  # Update last marked time
+            attendance_status = "On-time" if now.time() <= LATE_ATTENDANCE_TIME else "Late"
+            
+            # ✅ Fetch Employee Name from Database
+            user = await db.users.find_one({"emp_id": emp_id})  # Adjust collection name
+            emp_name = user["name"] if user else "Unknown"
+
             attendance_entry = {
-                "emp_id": emp_id,
-                "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "emp_id": emp_id,
+            "emp_name":emp_name,
+            "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"), # ✅ Store as a datetime object
+            "status": attendance_status
             }
-            await db.attendance.insert_one(attendance_entry)
-            return JSONResponse(content={"message": f"Attendance marked for {emp_id}", "timestamp": attendance_entry["timestamp"]})
-        
+            await db.attendance_collection.insert_one(attendance_entry)
+            return JSONResponse(content={"message": f"Attendance marked for {emp_name} ({emp_id})", "timestamp": attendance_entry["timestamp"], "status": attendance_status})
+
         return JSONResponse(content={"message": "No face recognized"})
     except Exception as e:
+        return JSONResponse(content={"error": str(e)})
+
+@router.get("/get-attendance")
+async def get_attendance():
+    try:
+        records = await db.attendance_collection.find().to_list(None)  # ✅ Corrected Collection Name
+
+        # Convert ObjectId and datetime fields to string
+        for record in records:
+            record["_id"] = str(record["_id"])
+            if "timestamp" in record and isinstance(record["timestamp"], datetime):
+                record["timestamp"] = record["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
+
+        return JSONResponse(content={"attendance": records})
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)})
+
+@router.get("/get-weekly-attendance")
+async def get_weekly_attendance(emp_id: str = Query(...)):
+    try:
+        today = datetime.utcnow()
+        week_start = today - timedelta(days=today.weekday())  
+
+        # ✅ Convert stored timestamps from string to datetime before filtering
+        records = await db.attendance_collection.find({
+            "emp_id": emp_id
+        }).to_list(None)
+
+        filtered_records = []
+        for record in records:
+            if "timestamp" in record:
+                if isinstance(record["timestamp"], str):  
+                    record["timestamp"] = datetime.strptime(record["timestamp"], "%Y-%m-%d %H:%M:%S")
+
+                if record["timestamp"] >= week_start:  
+                    record["_id"] = str(record["_id"])
+                    record["timestamp"] = record["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
+                    filtered_records.append(record)
+
+        return JSONResponse(content={"weekly_attendance": filtered_records})
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)})
+
+@router.get("/get-monthly-attendance")
+async def get_monthly_attendance(
+    emp_id: str = Query(...), 
+    month: int = Query(datetime.utcnow().month), 
+    year: int = Query(datetime.utcnow().year)
+):
+    try:
+        start_date = datetime(year, month, 1)
+        if month == 12:
+            end_date = datetime(year + 1, 1, 1)
+        else:
+            end_date = datetime(year, month + 1, 1)
+
+        print(f"Checking attendance for emp_id: {emp_id}, Month: {month}, Year: {year}")  # Debugging
+
+        records = await db.attendance_collection.find({
+            "emp_id": emp_id,
+            "timestamp": {"$gte": start_date, "$lt": end_date}
+        }).to_list(None)
+
+        if not records:
+            print("No records found!")  # Debugging
+
+        for record in records:
+            record["_id"] = str(record["_id"])
+            if "timestamp" in record and isinstance(record["timestamp"], datetime):
+                record["timestamp"] = record["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
+
+        return JSONResponse(content={"monthly_attendance": records})
+    except Exception as e:
+        print("Error:", str(e))  # Debugging
+        return JSONResponse(content={"error": str(e)})
+
+@router.get("/get-yearly-attendance")
+async def get_yearly_attendance(
+    emp_id: str = Query(...), 
+    year: int = Query(datetime.utcnow().year)
+):
+    try:
+        start_date = datetime(year, 1, 1)
+        end_date = datetime(year + 1, 1, 1)
+
+        print(f"Checking attendance for emp_id: {emp_id}, Year: {year}")  # Debugging
+
+        records = await db.attendance_collection.find({
+            "emp_id": emp_id,
+            "timestamp": {"$gte": start_date, "$lt": end_date}
+        }).to_list(None)
+
+        if not records:
+            print("No records found!")  # Debugging
+
+        for record in records:
+            record["_id"] = str(record["_id"])
+            if "timestamp" in record and isinstance(record["timestamp"], datetime):
+                record["timestamp"] = record["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
+
+        return JSONResponse(content={"yearly_attendance": records})
+    except Exception as e:
+        print("Error:", str(e))  # Debugging
         return JSONResponse(content={"error": str(e)})
