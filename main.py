@@ -2,7 +2,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from routes.attendance import router as attendance_router
 from database.connection import db  # Ensure the database connection is imported
-
+from middleware import GPSValidationMiddleware
 app = FastAPI()
 
 # Enable CORS for WebSockets & HTTP requests
@@ -13,7 +13,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+# Apply Middleware
+app.add_middleware(GPSValidationMiddleware)
 app.include_router(attendance_router, prefix="/api")
 
 # Store connected WebSocket clients
